@@ -13,7 +13,7 @@ from baselines import logger
 from mpi4py import MPI
 import argparse
 
-LOG_DIR = '/tmp/procgen'
+SEED = 0
 
 def main():
     num_envs = 64
@@ -25,17 +25,19 @@ def main():
     nminibatches = 8
     ppo_epochs = 3
     clip_range = .2
-    timesteps_per_proc = 50_000_000
+    timesteps_per_proc = 5_000_000
     use_vf_clipping = True
 
     parser = argparse.ArgumentParser(description='Process procgen training arguments.')
-    parser.add_argument('--env_name', type=str, default='coinrun')
-    parser.add_argument('--distribution_mode', type=str, default='hard', choices=["easy", "hard", "exploration", "memory", "extreme"])
-    parser.add_argument('--num_levels', type=int, default=0)
+    parser.add_argument('--env_name', type=str, default='bigfish')
+    parser.add_argument('--distribution_mode', type=str, default='easy', choices=["easy", "hard", "exploration", "memory", "extreme"])
+    parser.add_argument('--num_levels', type=int, default=200)
     parser.add_argument('--start_level', type=int, default=0)
     parser.add_argument('--test_worker_interval', type=int, default=0)
 
     args = parser.parse_args()
+    
+    LOG_DIR = f'/raid0/dian/procgen_baseline/{args.env_name}/ppo_run{SEED}'
 
     test_worker_interval = args.test_worker_interval
 
@@ -48,21 +50,40 @@ def main():
         is_test_worker = comm.Get_rank() % test_worker_interval == (test_worker_interval - 1)
 
     mpi_rank_weight = 0 if is_test_worker else 1
-    num_levels = 0 if is_test_worker else args.num_levels
+    num_levels = args.num_levels
 
-    log_comm = comm.Split(1 if is_test_worker else 0, 0)
-    format_strs = ['csv', 'stdout'] if log_comm.Get_rank() == 0 else []
+    # log_comm = comm.Split(1 if is_test_worker else 0, 0)
+    format_strs = ['csv', 'stdout'] # if log_comm.Get_rank() == 0 else []
     logger.configure(dir=LOG_DIR, format_strs=format_strs)
 
     logger.info("creating environment")
-    venv = ProcgenEnv(num_envs=num_envs, env_name=args.env_name, num_levels=num_levels, start_level=args.start_level, distribution_mode=args.distribution_mode)
+    venv = ProcgenEnv(
+        num_envs=num_envs, 
+        env_name=args.env_name, 
+        num_levels=num_levels, 
+        start_level=args.start_level, 
+        distribution_mode=args.distribution_mode,
+        rand_seed=SEED,
+    )
     venv = VecExtractDictObs(venv, "rgb")
-
     venv = VecMonitor(
         venv=venv, filename=None, keep_buf=100,
     )
-
     venv = VecNormalize(venv=venv, ob=False)
+
+    test_venv = ProcgenEnv(
+        num_envs=num_envs, 
+        env_name=args.env_name, 
+        num_levels=0, 
+        start_level=args.start_level, 
+        distribution_mode=args.distribution_mode,
+        rand_seed=SEED,
+    )
+    test_venv = VecExtractDictObs(test_venv, "rgb")
+    test_venv = VecMonitor(
+        venv=test_venv, filename=None, keep_buf=100,
+    )
+    test_venv = VecNormalize(venv=test_venv, ob=False)
 
     logger.info("creating tf session")
     setup_mpi_gpus()
@@ -78,7 +99,8 @@ def main():
         env=venv,
         network=conv_fn,
         total_timesteps=timesteps_per_proc,
-        save_interval=0,
+        eval_env=test_venv,
+        save_interval=100,
         nsteps=nsteps,
         nminibatches=nminibatches,
         lam=lam,
