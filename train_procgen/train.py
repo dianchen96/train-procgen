@@ -13,7 +13,9 @@ from baselines import logger
 from mpi4py import MPI
 import argparse
 
-SEED = 0
+from .onehot_env import VecExtractDictObsOnehot
+
+SEED = 1
 
 def main():
     num_envs = 64
@@ -29,15 +31,16 @@ def main():
     use_vf_clipping = True
 
     parser = argparse.ArgumentParser(description='Process procgen training arguments.')
-    parser.add_argument('--env_name', type=str, default='bigfish')
+    parser.add_argument('--env-name', type=str, default='bigfish')
     parser.add_argument('--distribution_mode', type=str, default='easy', choices=["easy", "hard", "exploration", "memory", "extreme"])
-    parser.add_argument('--num_levels', type=int, default=200)
+    parser.add_argument('--num-levels', type=int, default=200)
     parser.add_argument('--start_level', type=int, default=0)
     parser.add_argument('--test_worker_interval', type=int, default=0)
+    parser.add_argument('--obs', choices=['rgb', 'lbl', 'onehot_lbl'], default='rgb')
 
     args = parser.parse_args()
     
-    LOG_DIR = f'/raid0/dian/procgen_baseline/{args.env_name}/ppo_run{SEED}'
+    LOG_DIR = f'/raid0/dian/procgen_baseline/{args.env_name}/ppo_{args.obs}_{args.num_levels}_{SEED}'
 
     test_worker_interval = args.test_worker_interval
 
@@ -65,12 +68,6 @@ def main():
         distribution_mode=args.distribution_mode,
         rand_seed=SEED,
     )
-    venv = VecExtractDictObs(venv, "rgb")
-    venv = VecMonitor(
-        venv=venv, filename=None, keep_buf=100,
-    )
-    venv = VecNormalize(venv=venv, ob=False)
-
     test_venv = ProcgenEnv(
         num_envs=num_envs, 
         env_name=args.env_name, 
@@ -79,11 +76,28 @@ def main():
         distribution_mode=args.distribution_mode,
         rand_seed=SEED,
     )
-    test_venv = VecExtractDictObs(test_venv, "rgb")
-    test_venv = VecMonitor(
-        venv=test_venv, filename=None, keep_buf=100,
-    )
-    test_venv = VecNormalize(venv=test_venv, ob=False)
+    if args.obs == 'onehot_lbl':
+        venv = VecExtractDictObsOnehot(venv, args.env_name)
+        venv = VecMonitor(
+            venv=venv, filename=None, keep_buf=100,
+        )
+        test_venv = VecExtractDictObsOnehot(test_venv, args.env_name)
+        test_venv = VecMonitor(
+            venv=test_venv, filename=None, keep_buf=100,
+        )
+    else:
+        venv = VecExtractDictObs(venv, args.obs)
+        venv = VecMonitor(
+            venv=venv, filename=None, keep_buf=100,
+        )
+        venv = VecNormalize(venv=venv, ob=False)
+    
+       
+        test_venv = VecExtractDictObs(test_venv, args.obs)
+        test_venv = VecMonitor(
+            venv=test_venv, filename=None, keep_buf=100,
+        )
+        test_venv = VecNormalize(venv=test_venv, ob=False)
 
     logger.info("creating tf session")
     setup_mpi_gpus()
